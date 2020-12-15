@@ -15,6 +15,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace ILGPU.Runtime.Cuda
 {
@@ -752,6 +753,60 @@ namespace ILGPU.Runtime.Cuda
             return result;
         }
 
+        private delegate CudaError SimulateLaunchHandler(
+            IntPtr kernelFunction,
+            int gridDimX,
+            int gridDimY,
+            int gridDimZ,
+            int blockDimX,
+            int blockDimY,
+            int blockDimZ,
+            int sharedMemSizeInBytes,
+            IntPtr stream,
+            IntPtr args,
+            IntPtr kernelArgs);
+
+        private static CudaError SimulateLaunch(
+            IntPtr kernelFunction,
+            int gridDimX,
+            int gridDimY,
+            int gridDimZ,
+            int blockDimX,
+            int blockDimY,
+            int blockDimZ,
+            int sharedMemSizeInBytes,
+            IntPtr stream,
+            IntPtr args,
+            IntPtr kernelArgs)
+        {
+            // Allocate 2 pages of main memory
+            const int DataSize = 1024 * 2 * sizeof(int);
+            var data = (int*)Marshal.AllocHGlobal(DataSize);
+            data[0] = gridDimX;
+            data[1] = gridDimY;
+            data[2] = gridDimZ;
+            data[3] = blockDimX;
+            data[4] = blockDimY;
+            data[5] = blockDimZ;
+            data[6] = sharedMemSizeInBytes;
+
+            // Read kernel args
+            var config = (void**)kernelArgs;
+            var argsPtr = config[1];
+            var argsSize = (IntPtr)config[2];
+
+            Buffer.MemoryCopy(
+                argsPtr,
+                data + 8,
+                DataSize,
+                argsSize.ToInt64());
+
+            Marshal.FreeHGlobal((IntPtr)data);
+            return CudaError.CUDA_SUCCESS;
+        }
+
+        private static readonly SimulateLaunchHandler LaunchHandler = SimulateLaunch;
+
         /// <summary>
         /// Launches the given kernel function.
         /// </summary>
@@ -825,7 +880,7 @@ namespace ILGPU.Runtime.Cuda
             IntPtr stream,
             IntPtr args,
             IntPtr kernelArgs) =>
-            cuLaunchKernel(
+            LaunchHandler(
                 kernelFunction,
                 gridDimX,
                 gridDimY,
